@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"strconv"
 	"time"
@@ -16,6 +18,33 @@ import (
 	"github.com/prometheus/common/model"
 )
 
+type SimpleWebServer struct {
+	lastInstanceSize int       `json:"last_instance_size"`
+	lastCheck        time.Time `json:"last_check"`
+}
+
+func (sws *SimpleWebServer) start() {
+	log.Printf("Starting web server\n")
+
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		json, _ := json.Marshal(sws)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(json)
+	})
+
+	go func() {
+		bindPort := "8080"
+		if os.Getenv("BIND_PORT") != "" {
+			bindPort = os.Getenv("BIND_PORT")
+		}
+
+		if err := http.ListenAndServe(":"+bindPort, nil); err != nil {
+			panic(fmt.Sprintf("Error starting simple webserver: %v", err))
+		}
+	}()
+}
+
 type Config struct {
 	PrometheusHost   string
 	ThresholdUp      float64
@@ -26,6 +55,7 @@ type Config struct {
 	PrometheusMetric string
 	prometheusV1API  *promV1.API
 	godoClient       *godo.Client
+	simpleWebServer  *SimpleWebServer
 }
 
 func LoadConfig() (Config, error) {
@@ -79,6 +109,12 @@ func LoadConfig() (Config, error) {
 	if config.PrometheusMetric, ok = os.LookupEnv("PROMETHEUS_METRIC"); !ok {
 		return config, errors.New("PROMETHEUS_METRIC is required")
 	}
+
+	// todo: make optional
+	SimpleWebServer := SimpleWebServer{}
+	SimpleWebServer.start()
+
+	config.simpleWebServer = &SimpleWebServer
 
 	return config, nil
 }
@@ -191,6 +227,9 @@ func (c *Config) getCurrentAppSize(ctx context.Context) int {
 	size := int(service.GetInstanceCount())
 
 	log.Printf("Current app size: %d\n", size)
+
+	c.simpleWebServer.lastInstanceSize = size
+	c.simpleWebServer.lastCheck = time.Now()
 
 	return size
 }
